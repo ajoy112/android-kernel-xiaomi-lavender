@@ -1,0 +1,97 @@
+name: Build Greenforce Lavender A11 KSUN
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-kernel:
+    name: Build Kernel
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies & Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential ccache curl flex git gnupg gperf liblz4-tool libncurses5-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev python3 binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          GH_HOST="github.com"
+          CLANG_REPO="EmanuelCN/zyc_clang-14.git"
+          git clone --depth=1 "https://${GH_HOST}/${CLANG_REPO}" clang
+
+      - name: Pasang KernelSU-Next Legacy (Mode Kprobes untuk 4.4)
+        run: |
+          rm -rf KernelSU KernelSU-Next drivers/kernelsu
+          sed -i '/kernelsu/d' drivers/Kconfig drivers/Makefile
+          GH_HOST="github.com"
+          KSUN_REPO="KernelSU-Next/KernelSU-Next.git"
+          git clone --depth=1 -b legacy "https://${GH_HOST}/${KSUN_REPO}" KernelSU-Next
+          ln -sf "$PWD/KernelSU-Next/kernel" "$PWD/drivers/kernelsu"
+          echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          grep -q "syscall_fn_t" arch/arm64/include/asm/syscall.h || sed -i '/#define __ASM_SYSCALL_H/a typedef asmlinkage long (*syscall_fn_t)(const struct pt_regs *);' arch/arm64/include/asm/syscall.h
+          sed -i 's/copy_to_iter(KERNEL_SU_RC/copy_to_iter((void *)KERNEL_SU_RC/g' drivers/kernelsu/runtime/ksud_integration.c
+          sed -i '1i #include <linux/compat.h>\n#define in_compat_syscall() is_compat_task()' drivers/kernelsu/sulog/event.c
+          sed -i '1i #define ALIGN_DOWN(x, a) __ALIGN_KERNEL((x) - ((a) - 1), (a))' drivers/kernelsu/feature/adb_root.c
+          echo 'ccflags-y += -Wno-error -Wno-implicit-function-declaration' >> drivers/kernelsu/Kbuild
+
+      - name: Cari Defconfig Asli Lavender
+        run: |
+          if [ -f "arch/arm64/configs/vendor/lavender-perf_defconfig" ]; then
+            DEFCONFIG="vendor/lavender-perf_defconfig"
+          elif [ -f "arch/arm64/configs/lavender_defconfig" ]; then
+            DEFCONFIG="lavender_defconfig"
+          else
+            DEFCONFIG=$(cd arch/arm64/configs && find . -name "*lavender*defconfig" | sed 's|^\./||' | head -n 1)
+          fi
+          echo "Menggunakan Defconfig Asli: ${DEFCONFIG}"
+          echo "DEFCONFIG_FILE=${DEFCONFIG}" >> $GITHUB_ENV
+
+      - name: Compile Kernel
+        run: |
+          export PATH="$PWD/clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          make O=out ${{ env.DEFCONFIG_FILE }}
+          ./scripts/config --file out/.config \
+            -e CONFIG_KSU \
+            -e CONFIG_KPROBES \
+            -e CONFIG_HAVE_KPROBES \
+            -e CONFIG_KPROBE_EVENTS \
+            -e CONFIG_KSU_KPROBE_HOOK \
+            -d CONFIG_KSU_MANUAL_HOOK \
+            -d CONFIG_COMPAT_VDSO
+          make O=out olddefconfig
+          set -o pipefail
+          make -j$(nproc) O=out \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            LD=ld.lld 2>&1 | tee build.log || { echo "=== DETAIL ERROR DITEMUKAN ==="; grep -i -B 2 -A 4 -E "error:|stop|undefined" build.log | tail -n 40; exit 1; }
+          ls -lh out/arch/arm64/boot/Image.gz-dtb
+
+      - name: Package AnyKernel3 Lavender
+        run: |
+          GH_HOST="github.com"
+          AK3_PATH="projects-nexus/AnyKernel3.git"
+          git clone --depth=1 -b lavender "https://${GH_HOST}/${AK3_PATH}" AnyKernel3
+          rm -rf AnyKernel3/.git
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          cd AnyKernel3
+          zip -r9 ../Greenforce-Lavender-A11-KSUN.zip *
+
+      - name: Upload Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: greenforce-a11-ksun-${{ github.run_number }}
+          files: Greenforce-Lavender-A11-KSUN.zip
