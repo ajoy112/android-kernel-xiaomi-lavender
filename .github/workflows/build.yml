@@ -68,7 +68,10 @@ jobs:
           make O=out olddefconfig
           set -o pipefail
           make -j$(nproc) O=out \
-            CC="clang -fuse-ld=lld" \
+            LLVM_IAS=0 \
+            KCFLAGS="-no-integrated-as" \
+            KAFLAGS="-no-integrated-as" \
+            CC="clang -fuse-ld=lld -no-integrated-as" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
