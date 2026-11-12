@@ -21,6 +21,7 @@ jobs:
           GH_HOST="github.com"
           CLANG_REPO="EmanuelCN/zyc_clang-14.git"
           git clone --depth=1 "https://${GH_HOST}/${CLANG_REPO}" clang
+          ln -sf "$PWD/clang/bin/ld.lld" "$PWD/clang/bin/ld"
 
       - name: Pasang KernelSU-Next Legacy (Mode Kprobes untuk 4.4)
         run: |
@@ -67,7 +68,7 @@ jobs:
           make O=out olddefconfig
           set -o pipefail
           make -j$(nproc) O=out \
-            CC=clang \
+            CC="clang -fuse-ld=lld" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
